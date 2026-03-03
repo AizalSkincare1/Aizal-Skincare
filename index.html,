@@ -1,0 +1,225 @@
+// App.js
+import React, { useState, useEffect, createContext, useContext } from "react";
+import { BrowserRouter as Router, Routes, Route, Link, Navigate } from "react-router-dom";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
+
+// ================= FIREBASE CONFIG =================
+const firebaseConfig = {
+  apiKey: "AIzaSyB5Nn_cykIpozWS-Wy6GWut5GSQsLoTE5c",
+  authDomain: "aizal-skincare.firebaseapp.com",
+  projectId: "aizal-skincare",
+  storageBucket: "aizal-skincare.firebasestorage.app",
+  messagingSenderId: "941375329561",
+  appId: "1:941375329561:web:77a011185516c3401f6188"
+};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+// ================= CART CONTEXT =================
+const CartContext = createContext();
+const useCart = () => useContext(CartContext);
+
+function CartProvider({ children }) {
+  const [cart, setCart] = useState([]);
+
+  const addToCart = (product) => {
+    const exist = cart.find(p => p.id === product.id);
+    if (exist) setCart(cart.map(p => p.id === product.id ? { ...p, qty: p.qty + 1 } : p));
+    else setCart([...cart, { ...product, qty: 1 }]);
+  };
+
+  const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+  return <CartContext.Provider value={{ cart, setCart, addToCart, total }}>{children}</CartContext.Provider>;
+}
+
+// ================= MAIN APP =================
+export default function App() {
+  return (
+    <Router>
+      <CartProvider>
+        <Navbar />
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/cart" element={<Cart />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/admin" element={<Protected><Admin /></Protected>} />
+        </Routes>
+      </CartProvider>
+    </Router>
+  );
+}
+
+// ================= NAVBAR =================
+function Navbar() {
+  const { cart } = useCart();
+  return (
+    <div style={navStyle}>
+      <h2 style={{color:"#A6FFED"}}>AIZAL Skincare</h2>
+      <div>
+        <Link style={linkStyle} to="/">Home</Link>{" | "}
+        <Link style={linkStyle} to="/cart">Cart ({cart.length})</Link>{" | "}
+        <Link style={linkStyle} to="/admin">Admin</Link>
+      </div>
+    </div>
+  );
+}
+
+// ================= HOME =================
+function Home() {
+  const [products, setProducts] = useState([]);
+  const { addToCart } = useCart();
+
+  useEffect(() => { fetchProducts(); }, []);
+
+  const fetchProducts = async () => {
+    const data = await getDocs(collection(db, "products"));
+    setProducts(data.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+  };
+
+  const sendWhatsAppMessage = (phone, message) => {
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
+  };
+
+  return (
+    <div style={gridStyle}>
+      {products.map(p => (
+        <div key={p.id} style={cardStyle}>
+          <img src={p.image || "https://via.placeholder.com/300"} alt="" style={{ width: "100%", borderRadius:10 }} />
+          <h3>{p.name}</h3>
+          <p>₹{p.price}</p>
+          <button style={btnStyle} onClick={() => { addToCart(p); sendWhatsAppMessage("+911234567890", `Customer added ${p.name} to cart`) }}>Add to Cart</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ================= CART =================
+function Cart() {
+  const { cart, total, setCart } = useCart();
+
+  const placeOrder = async (paymentType) => {
+    if(cart.length===0){ alert("Cart empty"); return; }
+    const phone = prompt("Enter your mobile number for order & WhatsApp updates:");
+    if(!phone) return alert("Phone required");
+    await addDoc(collection(db, "orders"), { items: cart, total, status: "Pending", payment: paymentType, phone, date: new Date() });
+    await addDoc(collection(db, "customers"), { phone, date: new Date() });
+    alert("Order Placed");
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(`Thank you! Your order of ₹${total} has been received.`)}`, "_blank");
+    setCart([]);
+  };
+
+  const payOnline = () => {
+    alert("Razorpay integration placeholder - implement SDK in production");
+    placeOrder("Online");
+  };
+
+  return (
+    <div style={{ padding: 30 }}>
+      <h2>Cart</h2>
+      {cart.map(item => (<div key={item.id}>{item.name} x {item.qty}</div>))}
+      <h3>Total: ₹{total}</h3>
+      <button style={btnStyle} onClick={() => placeOrder("COD")}>Cash on Delivery</button>
+      <button style={{...btnStyle, marginLeft:10}} onClick={payOnline}>Pay Online</button>
+    </div>
+  );
+}
+
+// ================= LOGIN =================
+function Login() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const login = async () => {
+    try { await signInWithEmailAndPassword(auth, email, password); alert("Logged In"); }
+    catch(e){ alert("Login failed: "+e.message); }
+  };
+
+  return (
+    <div style={{ padding: 30 }}>
+      <h2>Admin Login</h2>
+      <input style={inputStyle} placeholder="Email" onChange={e=>setEmail(e.target.value)} />
+      <input style={inputStyle} placeholder="Password" type="password" onChange={e=>setPassword(e.target.value)} />
+      <button style={btnStyle} onClick={login}>Login</button>
+    </div>
+  );
+}
+
+// ================= PROTECTED ROUTE =================
+function Protected({ children }) {
+  const [user, setUser] = useState(null);
+  useEffect(() => { onAuthStateChanged(auth, u => setUser(u)); }, []);
+  if (user===null) return <Navigate to="/login" />;
+  return children;
+}
+
+// ================= ADMIN =================
+function Admin() {
+  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [newProduct, setNewProduct] = useState({ name:"", price:"", image:"" });
+
+  useEffect(()=>{ fetchProducts(); fetchOrders(); }, []);
+
+  const fetchProducts = async () => {
+    const data = await getDocs(collection(db,"products"));
+    setProducts(data.docs.map(doc=>({id:doc.id,...doc.data()})));
+  };
+
+  const fetchOrders = async () => {
+    const data = await getDocs(collection(db,"orders"));
+    setOrders(data.docs.map(doc=>({id:doc.id,...doc.data()})));
+  };
+
+  const addProduct = async () => {
+    if(!newProduct.name || !newProduct.price) return alert("Fill name & price");
+    await addDoc(collection(db,"products"), {...newProduct, price:Number(newProduct.price)});
+    setNewProduct({ name:"", price:"", image:"" });
+    fetchProducts();
+  };
+
+  const deleteProduct = async (id)=>{ await deleteDoc(doc(db,"products",id)); fetchProducts(); };
+  const updateStatus = async (id,status)=>{ await updateDoc(doc(db,"orders",id),{status}); fetchOrders(); };
+  const sendSchemeMsg = async ()=>{
+    const data = await getDocs(collection(db,"customers"));
+    data.docs.forEach(c=>{
+      window.open(`https://wa.me/${c.data().phone}?text=${encodeURIComponent("AIZAL Exclusive Offer! Shop now for luxury skincare.")}`,"_blank");
+    });
+  };
+
+  return (
+    <div style={{ padding:30 }}>
+      <h2>Admin Panel</h2>
+
+      <h3>Add Product</h3>
+      <input style={inputStyle} placeholder="Name" value={newProduct.name} onChange={e=>setNewProduct({...newProduct,name:e.target.value})} />
+      <input style={inputStyle} placeholder="Price" value={newProduct.price} onChange={e=>setNewProduct({...newProduct,price:e.target.value})} />
+      <input style={inputStyle} placeholder="Image URL" value={newProduct.image} onChange={e=>setNewProduct({...newProduct,image:e.target.value})} />
+      <button style={btnStyle} onClick={addProduct}>Add</button>
+
+      <h3>Products</h3>
+      {products.map(p=>(
+        <div key={p.id}>{p.name} - ₹{p.price} <button style={btnStyle} onClick={()=>deleteProduct(p.id)}>Delete</button></div>
+      ))}
+
+      <h3>Orders</h3>
+      {orders.map(o=>(
+        <div key={o.id}>₹{o.total} - {o.status} - {o.phone} <button style={btnStyle} onClick={()=>updateStatus(o.id,"Shipped")}>Mark Shipped</button></div>
+      ))}
+
+      <button style={{...btnStyle, marginTop:20}} onClick={sendSchemeMsg}>Send Scheme Message</button>
+    </div>
+  );
+}
+
+// ================= STYLES =================
+const navStyle={background:"#000", color:"#fff", padding:15, display:"flex", justifyContent:"space-between", alignItems:"center"};
+const linkStyle={color:"#A6FFED", textDecoration:"none", fontWeight:"bold"};
+const gridStyle={display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))", gap:20, padding:30};
+const cardStyle={background:"#fff", padding:20, borderRadius:15, boxShadow:"0 4px 15px rgba(0,0,0,0.2)", textAlign:"center"};
+const btnStyle={padding:"10px 20px", background:"#A6FFED", border:"none", borderRadius:8, cursor:"pointer", fontWeight:"bold"};
+const inputStyle={padding:"10px", margin:"5px 0", width:"250px", borderRadius:6, border:"1px solid #ccc"};
